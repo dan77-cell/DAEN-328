@@ -1,0 +1,51 @@
+# Three services: an empty database, a one-shot loader, and a dashboard.
+# Start everything:            docker compose up --build
+# Start over from nothing:     docker compose down -v   then   docker compose up --build
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - pgdata:/var/lib/postgresql/data              # the data lives here, outside the container
+      - ./db/init:/docker-entrypoint-initdb.d:ro     # .sql files here run ONCE, on an empty volume
+    healthcheck:                                     # "ready" means Postgres answers, not just "started"
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  seed:
+    build: ./seed
+    depends_on:
+      db:
+        condition: service_healthy                   # wait until the healthcheck passes
+    environment:
+      DB_HOST: db                                    # the service name, NOT localhost
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      CSV_PATH: /data/quotes.csv
+    volumes:
+      - ./data:/data:ro                              # the CSV stays on your laptop; the container reads it
+    restart: "no"                                    # runs once, then exits
+
+  web:
+    build: ./web
+    depends_on:
+      seed:
+        condition: service_completed_successfully    # start only after the loader exits with code 0
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "8501:8501"                                  # laptop port : container port
+
+volumes:
+  pgdata:
